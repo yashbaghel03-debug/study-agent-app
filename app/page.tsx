@@ -40,8 +40,8 @@ function parseConceptPayload(text: string) {
   const overview = normalized.split(/\n\n/)[0]?.trim() || normalized.trim()
 
   const strongAreas = Array.from(normalized.matchAll(/strong areas?:\s*([^\n]+)/gi)).map((match) => match[1].trim())
-  const weakAreas = Array.from(normalized.matchAll(/weak areas?:\s*([^\n]+)/gi)).map((match) => match[1].trim()))
-  const nextSteps = Array.from(normalized.matchAll(/next steps?:\s*([^\n]+)/gi)).map((match) => match[1].trim()))
+  const weakAreas = Array.from(normalized.matchAll(/weak areas?:\s*([^\n]+)/gi)).map((match) => match[1].trim())
+  const nextSteps = Array.from(normalized.matchAll(/next steps?:\s*([^\n]+)/gi)).map((match) => match[1].trim())
 
   const deepDiveGist = normalized
     .split(/\n\n/)
@@ -57,6 +57,20 @@ function parseConceptPayload(text: string) {
     nextSteps: nextSteps.length ? nextSteps : [],
     notes: normalized,
   }
+}
+
+function sanitizeContent(text: string) {
+  if (!text) return text
+  // Remove Markdown headings (leading #'s)
+  let out = text.replace(/^#{1,6}\s+/gm, '')
+  // Convert list markers to a clean bullet
+  out = out.replace(/(^|\n)\s*[-*+]\s+/g, '$1• ')
+  // Strip bold/italic markup (**bold**, *italic*, __bold__, _italic_)
+  out = out.replace(/(\*\*|__)(.*?)\1/g, '$2')
+  out = out.replace(/(\*|_)(.*?)\1/g, '$2')
+  // Collapse multiple blank lines
+  out = out.replace(/\n{3,}/g, '\n\n')
+  return out.trim()
 }
 
 export default function Home() {
@@ -86,7 +100,7 @@ export default function Home() {
       return
     }
     const data = (await response.json()) as ChatMessage[]
-    setMessages(data)
+    setMessages(data.map((m) => ({ ...m, content: sanitizeContent(m.content) })))
     setIsLoadingMessages(false)
   }
 
@@ -233,7 +247,7 @@ export default function Home() {
       streamedText += decoder.decode(value, { stream: true })
       setMessages((prev) =>
         prev.map((message) =>
-          message.id === assistantMessageId ? { ...message, content: streamedText } : message,
+          message.id === assistantMessageId ? { ...message, content: sanitizeContent(streamedText) } : message,
         ),
       )
     }
@@ -241,7 +255,7 @@ export default function Home() {
     streamedText += decoder.decode()
     setMessages((prev) =>
       prev.map((message) =>
-        message.id === assistantMessageId ? { ...message, content: streamedText, pending: false, showSaveButton: Boolean(detected.subject && detected.concept) } : message,
+        message.id === assistantMessageId ? { ...message, content: sanitizeContent(streamedText), pending: false, showSaveButton: Boolean(detected.subject && detected.concept) } : message,
       ),
     )
 
@@ -311,9 +325,17 @@ export default function Home() {
 
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
             {chats.map((chat) => (
-              <button
+              <div
                 key={chat.id}
+                role="button"
+                tabIndex={0}
                 onClick={() => void handleSelectChat(chat.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    void handleSelectChat(chat.id)
+                  }
+                }}
                 className={`group flex w-full items-center justify-between rounded-[1.75rem] border border-white/5 bg-[#0d172b]/90 px-4 py-4 text-left shadow-[0_24px_60px_-45px_rgba(0,0,0,0.85)] transition duration-200 ${activeChatId === chat.id ? "border-cyan-400/30 bg-cyan-500/10 text-cyan-100" : "hover:border-white/10 hover:bg-white/5"}`}
               >
                 <div className="min-w-0">
@@ -342,7 +364,7 @@ export default function Home() {
                     🗑️
                   </button>
                 </div>
-              </button>
+              </div>
             ))}
           </div>
         </aside>

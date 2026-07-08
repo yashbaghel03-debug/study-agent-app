@@ -1,4 +1,4 @@
-import { createXai } from '@ai-sdk/xai'
+import { createGroq } from '@ai-sdk/groq'
 import { streamText } from 'ai'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase'
@@ -138,7 +138,7 @@ export async function POST(request: NextRequest) {
 
     const systemPrompt = buildSystemPrompt(conceptRow, subjectTrimmed, conceptTrimmed)
 
-    const xai = createXai({ apiKey: process.env.XAI_API_KEY })
+    const groq = createGroq({ apiKey: process.env.GROQ_API_KEY })
 
     const messages: Array<{
       role: 'user'
@@ -169,7 +169,7 @@ export async function POST(request: NextRequest) {
     }
 
     const result = streamText({
-      model: xai('grok-4.3'),
+      model: groq('openai/gpt-oss-120b'),
       system: systemPrompt,
       messages,
       onFinish: async ({ text }) => {

@@ -1,4 +1,4 @@
-import { createXai } from '@ai-sdk/xai'
+import { createGroq } from '@ai-sdk/groq'
 import { generateText } from 'ai'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -11,10 +11,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ subject: '', concept: '' }, { status: 200 })
     }
 
-    const xai = createXai({ apiKey: process.env.XAI_API_KEY })
+    const groq = createGroq({ apiKey: process.env.GROQ_API_KEY })
 
     const { text } = await generateText({
-      model: xai('grok-4-fast'),
+      model: groq('llama-3.1-8b-instant'),
       prompt: [
         'Extract the study subject and concept from the following message.',
         'Return ONLY valid JSON with this exact shape: {"subject":"...","concept":"..."}.',
