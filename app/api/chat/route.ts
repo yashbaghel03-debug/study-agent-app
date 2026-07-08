@@ -78,7 +78,9 @@ export async function POST(request: NextRequest) {
     const subject = typeof body?.subject === 'string' ? body.subject : ''
     const concept = typeof body?.concept === 'string' ? body.concept : ''
     const chatId = typeof body?.chatId === 'string' ? body.chatId : ''
-    const imageUrl = typeof body?.imageUrl === 'string' ? body.imageUrl : ''
+    const imageUrls = Array.isArray(body?.imageUrls)
+      ? body.imageUrls.filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0)
+      : []
 
     if (!userMessage.trim()) {
       return NextResponse.json({ error: 'userMessage is required' }, { status: 400 })
@@ -96,7 +98,7 @@ export async function POST(request: NextRequest) {
       chat_id: chatId,
       role: 'user',
       content: userMessage,
-      image_url: imageUrl || null,
+      image_url: imageUrls[0] || null,
     })
 
     if (userMessageError) {
@@ -145,22 +147,21 @@ export async function POST(request: NextRequest) {
       content: Array<{ type: 'text'; text: string } | { type: 'file'; mediaType: string; data: URL | string }>
     }> = []
 
-    if (imageUrl) {
-      try {
-        const url = new URL(imageUrl)
-        messages.push({
-          role: 'user',
-          content: [
-            { type: 'text', text: userMessage },
-            { type: 'file', mediaType: getImageMediaType(url.pathname), data: url },
-          ],
-        })
-      } catch {
-        messages.push({
-          role: 'user',
-          content: [{ type: 'text', text: userMessage }],
-        })
-      }
+    if (imageUrls.length > 0) {
+      const content = [{ type: 'text' as const, text: userMessage }]
+      const fileParts = imageUrls.map((url: string) => {
+        try {
+          const parsedUrl = new URL(url)
+          return { type: 'file' as const, mediaType: getImageMediaType(parsedUrl.pathname), data: parsedUrl }
+        } catch {
+          return { type: 'file' as const, mediaType: 'image/jpeg', data: url }
+        }
+      })
+
+      messages.push({
+        role: 'user',
+        content: [...content, ...fileParts],
+      })
     } else {
       messages.push({
         role: 'user',

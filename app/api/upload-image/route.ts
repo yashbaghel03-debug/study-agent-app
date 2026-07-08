@@ -1,55 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase'
-
-const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
-const ALLOWED_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp']
-
-function sanitizeFileName(name: string) {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^[-.]+|[-.]+$/g, '') || 'upload'
-}
+import { uploadFilesToStorage } from '@/lib/file-upload'
 
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData()
-    const file = formData.get('image')
+    const files = formData.getAll('images').filter((entry): entry is File => entry instanceof File)
 
-    if (!(file instanceof File)) {
-      return NextResponse.json({ error: 'image file is required' }, { status: 400 })
+    if (files.length === 0) {
+      return NextResponse.json({ error: 'At least one image file is required' }, { status: 400 })
     }
 
-    if (!ALLOWED_CONTENT_TYPES.includes(file.type)) {
-      return NextResponse.json({ error: 'Only JPG, PNG, and WebP images are allowed' }, { status: 400 })
-    }
+    const uploadedImageUrls = await uploadFilesToStorage(files)
 
-    if (file.size > MAX_FILE_SIZE_BYTES) {
-      return NextResponse.json({ error: 'Image must be 5MB or smaller' }, { status: 400 })
-    }
-
-    const supabase = createClient()
-    const extension = file.name.split('.').pop()?.toLowerCase() || 'jpg'
-    const uniqueName = `${Date.now()}-${Math.random().toString(36).slice(2)}-${sanitizeFileName(file.name)}.${extension}`
-
-    const { data, error } = await supabase.storage
-      .from('chat-images')
-      .upload(uniqueName, file, {
-        contentType: file.type,
-        upsert: false,
-      })
-
-    if (error) {
-      throw error
-    }
-
-    const { data: publicUrlData } = supabase.storage.from('chat-images').getPublicUrl(data.path)
-
-    return NextResponse.json({ imageUrl: publicUrlData.publicUrl })
+    return NextResponse.json({ imageUrls: uploadedImageUrls })
   } catch (error) {
-    console.error('Upload image error', error)
-    return NextResponse.json({ error: 'Failed to upload image' }, { status: 500 })
+    const message = error instanceof Error ? error.message : 'Failed to upload image'
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }

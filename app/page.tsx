@@ -1,6 +1,10 @@
 "use client"
 
 import { ChangeEvent, useEffect, useRef, useState } from "react"
+import ChatSidebar from "./components/chat-sidebar"
+import FileUploadPanel from "./components/file-upload-panel"
+import ProfileMenu from "./components/profile-menu"
+import SiteNav from "./components/site-nav"
 
 type ChatSummary = {
   id: string
@@ -14,6 +18,7 @@ type ChatMessage = {
   role: "user" | "assistant"
   content: string
   image_url?: string | null
+  image_urls?: string[] | null
   created_at: string
   pending?: boolean
   showSaveButton?: boolean
@@ -80,9 +85,15 @@ export default function Home() {
   const [input, setInput] = useState("")
   const [selectedImageFile, setSelectedImageFile] = useState<File | null>(null)
   const [selectedImagePreview, setSelectedImagePreview] = useState<string | null>(null)
+  const [uploadError, setUploadError] = useState<string | null>(null)
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [isLoadingMessages, setIsLoadingMessages] = useState(false)
+  const [isProfileOpen, setIsProfileOpen] = useState(false)
+  const [uploadedFiles, setUploadedFiles] = useState<File[]>([])
+  const [isUploadPanelOpen, setIsUploadPanelOpen] = useState(false)
+  const [isUploadingFiles, setIsUploadingFiles] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const loadChats = async () => {
@@ -120,6 +131,10 @@ export default function Home() {
     setSelectedImageFile(null)
     setSelectedImagePreview(null)
     setInput("")
+    setUploadedFiles([])
+    setIsUploadPanelOpen(false)
+    setIsUploadingFiles(false)
+    setUploadError(null)
     setIsSidebarOpen(false)
   }
 
@@ -146,12 +161,34 @@ export default function Home() {
     await loadChats()
   }
 
-  const handleImagePick = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
+  const mergeFiles = (existing: File[], incoming: File[]) => {
+    const seen = new Set(existing.map((file) => `${file.name}-${file.size}-${file.lastModified}`))
+    return [...existing, ...incoming.filter((file) => !seen.has(`${file.name}-${file.size}-${file.lastModified}`))]
+  }
 
-    setSelectedImageFile(file)
-    setSelectedImagePreview(URL.createObjectURL(file))
+  const handleImagePick = (event: ChangeEvent<HTMLInputElement>) => {
+    const incomingFiles = Array.from(event.target.files ?? [])
+    if (incomingFiles.length === 0) return
+
+    const firstFile = incomingFiles[0]
+    setSelectedImageFile(firstFile)
+    setSelectedImagePreview(URL.createObjectURL(firstFile))
+    setUploadedFiles((prev) => mergeFiles(prev, incomingFiles))
+    setUploadError(null)
+    setIsUploadPanelOpen(true)
+    event.target.value = ""
+  }
+
+  const handleFilesChange = (files: File[]) => {
+    setUploadedFiles((prev) => mergeFiles(prev, files))
+    setUploadError(null)
+    if (files.length > 0) {
+      setIsUploadPanelOpen(true)
+    }
+  }
+
+  const handleRemoveUploadedFile = (index: number) => {
+    setUploadedFiles((prev) => prev.filter((_, itemIndex) => itemIndex !== index))
   }
 
   const removeSelectedImage = () => {
@@ -162,11 +199,28 @@ export default function Home() {
     setSelectedImagePreview(null)
   }
 
+  const resetMessageComposer = () => {
+    setInput("")
+    setUploadedFiles([])
+    setIsUploadPanelOpen(false)
+    setIsUploadingFiles(false)
+    setUploadError(null)
+    removeSelectedImage()
+  }
+
   const handleSend = async () => {
     const trimmedInput = input.trim()
-    if (!trimmedInput && !selectedImageFile) return
+    const allFiles = [
+      ...(selectedImageFile ? [selectedImageFile] : []),
+      ...uploadedFiles,
+    ]
+
+    if (!trimmedInput && allFiles.length === 0) return
+    if (isSending) return
 
     setIsSending(true)
+    setIsUploadingFiles(true)
+    setUploadError(null)
 
     let chatId = activeChatId
     if (!chatId) {
@@ -177,12 +231,14 @@ export default function Home() {
       await loadChats()
     }
 
+    const allFilesForMessage = allFiles.filter(Boolean)
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
       chat_id: chatId,
       role: "user",
       content: trimmedInput || "Sent an image",
       image_url: null,
+      image_urls: [],
       created_at: new Date().toISOString(),
     }
 
@@ -199,19 +255,45 @@ export default function Home() {
     }
 
     setMessages((prev) => [...prev, userMessage, assistantMessage])
-    setInput("")
 
-    let imageUrl: string | undefined
-    if (selectedImageFile) {
-      const formData = new FormData()
-      formData.append("image", selectedImageFile)
-      const uploadResponse = await fetch("/api/upload-image", {
-        method: "POST",
-        body: formData,
-      })
-      const uploadData = (await uploadResponse.json()) as { imageUrl?: string }
-      imageUrl = uploadData.imageUrl
+    let uploadedImageUrls: string[] = []
+    try {
+      if (allFilesForMessage.length > 0) {
+        const formData = new FormData()
+        formData.append('message', trimmedInput || 'Sent an image')
+        allFilesForMessage.forEach((file, index) => {
+          formData.append('images', file, file.name || `image-${index}`)
+        })
+
+        const uploadResponse = await fetch('/api/upload-image', {
+          method: 'POST',
+          body: formData,
+        })
+
+        const uploadData = (await uploadResponse.json()) as { imageUrls?: string[]; error?: string }
+        if (!uploadResponse.ok || !uploadData.imageUrls?.length) {
+          throw new Error(uploadData.error || 'Image upload failed')
+        }
+        uploadedImageUrls = uploadData.imageUrls
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Image upload failed'
+      setUploadError(message)
+      setMessages((prev) => prev.filter((messageItem) => messageItem.id !== assistantMessage.id && messageItem.id !== userMessage.id))
+      setIsSending(false)
+      setIsUploadingFiles(false)
+      return
     }
+
+    setMessages((prev) =>
+      prev.map((message) =>
+        message.id === userMessage.id
+          ? { ...message, image_urls: uploadedImageUrls.length > 0 ? uploadedImageUrls : [] }
+          : message,
+      ),
+    )
+
+    setIsUploadingFiles(false)
 
     const detectionResponse = await fetch("/api/detect-concept", {
       method: "POST",
@@ -228,7 +310,7 @@ export default function Home() {
         subject: detected.subject,
         concept: detected.concept,
         chatId,
-        imageUrl,
+        imageUrls: uploadedImageUrls,
       }),
     })
 
@@ -259,9 +341,7 @@ export default function Home() {
       ),
     )
 
-    if (selectedImageFile) {
-      removeSelectedImage()
-    }
+    resetMessageComposer()
     await loadChats()
     setIsSending(false)
   }
@@ -308,66 +388,23 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.18),_transparent_22%),radial-gradient(circle_at_bottom_right,_rgba(168,85,247,0.16),_transparent_30%),linear-gradient(180deg,#02040d_0%,#050813_100%)] text-slate-100">
+      <SiteNav currentPage="chat" />
       <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-6 px-4 py-6 lg:flex-row lg:px-6">
-        <aside className={`${isSidebarOpen ? "flex" : "hidden"} w-full flex-col rounded-[2rem] border border-white/10 bg-[#081124]/90 shadow-[0_45px_120px_-50px_rgba(0,0,0,0.8)] backdrop-blur-xl lg:flex lg:w-80 lg:border-b-0 lg:border-r`}>
-          <div className="flex items-center justify-between gap-4 border-b border-white/10 px-5 py-4">
-            <div>
-              <p className="text-sm font-semibold tracking-wide text-cyan-200">Study Agent</p>
-              <p className="text-xs text-slate-400">3D learning workspace</p>
-            </div>
-            <button
-              className="rounded-full border border-cyan-400/30 bg-cyan-500/15 px-4 py-2 text-sm font-semibold text-cyan-200 transition duration-200 hover:-translate-y-0.5 hover:bg-cyan-500/25"
-              onClick={handleNewChat}
-            >
-              New Chat
-            </button>
+        <div className={`${isSidebarOpen ? 'block' : 'hidden'} w-full lg:block lg:w-80`}>
+          <div className={`${isSidebarCollapsed ? 'w-20' : 'w-full'} transition-all duration-300 lg:w-full`}>
+            <ChatSidebar
+              chats={chats}
+              activeChatId={activeChatId}
+              isCollapsed={isSidebarCollapsed}
+              onToggleCollapsed={() => setIsSidebarCollapsed((value) => !value)}
+              onToggleMobile={() => setIsSidebarOpen((value) => !value)}
+              onSelectChat={(chatId) => void handleSelectChat(chatId)}
+              onNewChat={handleNewChat}
+              onRenameChat={(chatId) => void handleRenameChat(chatId)}
+              onDeleteChat={(chatId) => void handleDeleteChat(chatId)}
+            />
           </div>
-
-          <div className="flex-1 overflow-y-auto p-4 space-y-3">
-            {chats.map((chat) => (
-              <div
-                key={chat.id}
-                role="button"
-                tabIndex={0}
-                onClick={() => void handleSelectChat(chat.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    void handleSelectChat(chat.id)
-                  }
-                }}
-                className={`group flex w-full items-center justify-between rounded-[1.75rem] border border-white/5 bg-[#0d172b]/90 px-4 py-4 text-left shadow-[0_24px_60px_-45px_rgba(0,0,0,0.85)] transition duration-200 ${activeChatId === chat.id ? "border-cyan-400/30 bg-cyan-500/10 text-cyan-100" : "hover:border-white/10 hover:bg-white/5"}`}
-              >
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold">{chat.title || "Untitled chat"}</p>
-                  <p className="mt-1 text-xs tracking-wide text-slate-400">{getRelativeDate(chat.created_at)}</p>
-                </div>
-                <div className="flex items-center gap-2 opacity-0 transition duration-200 group-hover:opacity-100">
-                  <button
-                    className="rounded-full border border-white/10 p-2 text-xs text-slate-300 hover:border-cyan-300 hover:text-cyan-200"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      void handleRenameChat(chat.id)
-                    }}
-                    aria-label="Rename chat"
-                  >
-                    ✏️
-                  </button>
-                  <button
-                    className="rounded-full border border-white/10 p-2 text-xs text-slate-300 hover:border-rose-300 hover:text-rose-200"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      void handleDeleteChat(chat.id)
-                    }}
-                    aria-label="Delete chat"
-                  >
-                    🗑️
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </aside>
+        </div>
 
         <main className="flex flex-1 flex-col">
           <div className="flex items-center justify-between gap-3 rounded-[2rem] border border-white/10 bg-[#081124]/85 px-5 py-4 shadow-[0_25px_70px_-45px_rgba(0,0,0,0.8)] backdrop-blur-xl lg:hidden">
@@ -393,7 +430,13 @@ export default function Home() {
                 {messages.map((message) => (
                   <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
                     <div className={`max-w-[85%] rounded-[2rem] border ${message.role === "user" ? "border-cyan-400/20 bg-cyan-600/90 text-slate-100 shadow-[0_28px_80px_-45px_rgba(56,189,248,0.45)]" : "border-white/10 bg-[#0d162b]/95 text-slate-200 shadow-[0_28px_80px_-45px_rgba(15,23,42,0.65)]"} px-5 py-4 backdrop-blur-sm`}> 
-                      {message.image_url ? (
+                      {message.image_urls?.length ? (
+                        <div className="mb-3 grid gap-3 sm:grid-cols-2">
+                          {message.image_urls.map((imageUrl) => (
+                            <img key={imageUrl} src={imageUrl} alt="Attached message image" className="h-auto max-h-60 w-full rounded-[1.5rem] object-cover shadow-[0_18px_60px_-40px_rgba(0,0,0,0.55)]" />
+                          ))}
+                        </div>
+                      ) : message.image_url ? (
                         <img src={message.image_url} alt="Attached message image" className="mb-3 h-auto max-h-60 w-full rounded-[1.5rem] object-cover shadow-[0_18px_60px_-40px_rgba(0,0,0,0.55)]" />
                       ) : null}
                       <p className="whitespace-pre-wrap text-sm leading-7">{message.content || (message.pending ? "Thinking…" : "")}</p>
@@ -432,6 +475,27 @@ export default function Home() {
               </div>
             ) : null}
 
+            {uploadError ? (
+              <div className="mb-4 flex items-center justify-between gap-3 rounded-[1.25rem] border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+                <span>{uploadError}</span>
+                <button className="rounded-full border border-rose-400/20 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-rose-200" onClick={() => void handleSend()}>
+                  Retry
+                </button>
+              </div>
+            ) : null}
+
+            {isUploadingFiles || isSending ? (
+              <div className="mb-4 rounded-[1.25rem] border border-cyan-400/20 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-200">
+                {isUploadingFiles ? 'Uploading image…' : 'Analyzing image…'}
+              </div>
+            ) : null}
+
+            {isUploadPanelOpen ? (
+              <div className="mb-4 rounded-[1.75rem] border border-white/10 bg-slate-900/70 p-4">
+                <FileUploadPanel files={uploadedFiles} onFilesChange={handleFilesChange} isUploading={isUploadingFiles} onRemoveFile={handleRemoveUploadedFile} />
+              </div>
+            ) : null}
+
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
               <input
                 type="file"
@@ -440,13 +504,24 @@ export default function Home() {
                 className="hidden"
                 onChange={handleImagePick}
               />
-              <button
-                className="inline-flex h-14 w-14 items-center justify-center rounded-3xl border border-white/10 bg-slate-900/80 text-xl text-cyan-200 transition duration-200 hover:-translate-y-0.5 hover:bg-slate-800/90"
-                onClick={() => fileInputRef.current?.click()}
-                aria-label="Attach image"
-              >
-                📎
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  className="inline-flex h-14 w-14 items-center justify-center rounded-3xl border border-white/10 bg-slate-900/80 text-xl text-cyan-200 transition duration-200 hover:-translate-y-0.5 hover:bg-slate-800/90 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => setIsUploadPanelOpen((value) => !value)}
+                  aria-label="Open upload options"
+                  disabled={isSending}
+                >
+                  +
+                </button>
+                <button
+                  className="inline-flex h-14 w-14 items-center justify-center rounded-3xl border border-white/10 bg-slate-900/80 text-xl text-cyan-200 transition duration-200 hover:-translate-y-0.5 hover:bg-slate-800/90 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => fileInputRef.current?.click()}
+                  aria-label="Attach image"
+                  disabled={isSending}
+                >
+                  📎
+                </button>
+              </div>
               <textarea
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
@@ -454,17 +529,27 @@ export default function Home() {
                 className="min-h-[56px] flex-1 rounded-[1.75rem] border border-white/10 bg-[#061026]/90 px-4 py-3 text-sm text-slate-100 outline-none transition duration-200 focus:border-cyan-400 focus:ring-2 focus:ring-cyan-500/20"
                 rows={1}
               />
-              <button
-                className="inline-flex h-14 items-center justify-center rounded-[1.75rem] bg-cyan-500 px-6 text-sm font-semibold text-slate-950 transition duration-200 hover:-translate-y-0.5 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
-                onClick={() => void handleSend()}
-                disabled={isSending}
-              >
-                {isSending ? "Sending" : "Send"}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  className="inline-flex h-14 items-center justify-center rounded-[1.75rem] bg-cyan-500 px-6 text-sm font-semibold text-slate-950 transition duration-200 hover:-translate-y-0.5 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => void handleSend()}
+                  disabled={isSending}
+                >
+                  {isSending ? "Sending" : "Send"}
+                </button>
+                <button
+                  className="inline-flex h-14 w-14 items-center justify-center rounded-[1.75rem] border border-white/10 bg-slate-900/80 text-lg text-slate-200 transition duration-200 hover:bg-slate-800/90"
+                  onClick={() => setIsProfileOpen(true)}
+                  aria-label="Open profile menu"
+                >
+                  AC
+                </button>
+              </div>
             </div>
           </div>
         </main>
       </div>
+      <ProfileMenu isOpen={isProfileOpen} onClose={() => setIsProfileOpen(false)} />
     </div>
   )
 }

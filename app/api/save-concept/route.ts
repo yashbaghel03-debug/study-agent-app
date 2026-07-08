@@ -41,7 +41,6 @@ export async function POST(request: NextRequest) {
           weak_areas: weakAreas,
           next_steps: nextSteps,
           notes,
-          updated_at: new Date().toISOString(),
         },
         { onConflict: 'subject,concept' },
       )
