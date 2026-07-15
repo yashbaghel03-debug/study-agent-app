@@ -12,7 +12,7 @@ type ConceptRecord = {
   weak_areas: string[] | null
   next_steps: string[] | null
   updated_at: string | null
-  created_at: string | null
+  created_at?: string | null
 }
 
 type DashboardClientProps = {
@@ -66,7 +66,7 @@ function getPercentValue(record: ConceptRecord) {
   return 0
 }
 
-function formatDate(value: string | null, fallbackValue: string | null) {
+function formatDate(value: string | null | undefined, fallbackValue?: string | null) {
   const dateValue = value || fallbackValue
   if (!dateValue) return 'Not updated yet'
   return new Date(dateValue).toLocaleDateString(undefined, {

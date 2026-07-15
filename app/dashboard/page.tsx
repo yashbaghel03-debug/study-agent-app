@@ -12,6 +12,7 @@ type ConceptRecord = {
   weak_areas: string[] | null
   next_steps: string[] | null
   updated_at: string | null
+  created_at?: string | null
 }
 
 export const dynamic = 'force-dynamic'
