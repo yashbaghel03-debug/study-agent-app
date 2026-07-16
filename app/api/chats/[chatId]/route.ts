@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase'
+import { requireUser } from '@/lib/auth'
 
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ chatId: string }> },
 ) {
   try {
+    const auth = await requireUser()
+    if (auth.error) return auth.error
+
+    const { user, supabase } = auth
     const body = await request.json()
     const title = typeof body?.title === 'string' ? body.title : ''
     const { chatId } = await params
@@ -14,9 +18,11 @@ export async function PATCH(
       return NextResponse.json({ error: 'title is required' }, { status: 400 })
     }
 
-    const supabase = createClient()
-
-    const { error } = await supabase.from('chats').update({ title }).eq('id', chatId)
+    const { error } = await supabase
+      .from('chats')
+      .update({ title })
+      .eq('id', chatId)
+      .eq('user_id', user.id)
 
     if (error) {
       throw error
@@ -34,10 +40,13 @@ export async function DELETE(
   { params }: { params: Promise<{ chatId: string }> },
 ) {
   try {
-    const { chatId } = await params
-    const supabase = createClient()
+    const auth = await requireUser()
+    if (auth.error) return auth.error
 
-    const { error } = await supabase.from('chats').delete().eq('id', chatId)
+    const { user, supabase } = auth
+    const { chatId } = await params
+
+    const { error } = await supabase.from('chats').delete().eq('id', chatId).eq('user_id', user.id)
 
     if (error) {
       throw error

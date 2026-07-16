@@ -1,36 +1,69 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Study Agent
 
-## Getting Started
+Private AI study coach with authenticated chats, image uploads, and a per-user mastery dashboard.
 
-First, run the development server:
+## Features
+
+- Email/password auth (Supabase Auth)
+- User-scoped chats, messages, and concepts (RLS)
+- Streaming tutoring replies (Groq)
+- Image uploads to Supabase Storage
+- Save concept progress to a personal dashboard
+- Profile settings, theme toggle, and logout
+- Forgot password / reset password flow
+- First-time onboarding for new users
+- Per-user API rate limits (chat, uploads, concept detection)
+- Auto-save study memory when photo uploads succeed
+
+## Setup
+
+### 1. Environment variables
+
+Copy `.env.example` to `.env.local` and fill in values:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key
+GROQ_API_KEY=your_groq_api_key
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 2. Supabase database
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+In the Supabase SQL editor, run:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. `supabase/migrations/0001_init.sql`
+2. If you already applied an older schema, also run `supabase/migrations/0002_upgrade_existing.sql`
+3. `supabase/migrations/0003_user_features.sql` (onboarding + API rate limits)
 
-## Learn More
+In Supabase Auth settings:
 
-To learn more about Next.js, take a look at the following resources:
+- Enable Email provider
+- Add your site URL (local `http://localhost:3000` and your Vercel URL)
+- Add redirect URLs:
+  - `https://YOUR_DOMAIN/auth/callback`
+  - `https://YOUR_DOMAIN/auth/callback?next=/reset-password`
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### 3. Run locally
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+npm install
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000).
 
 ## Deploy on Vercel
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+1. Import the repo in Vercel
+2. Add the same three environment variables
+3. Deploy
+4. Add the Vercel URL to Supabase Auth redirect allow-list
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Scripts
+
+```bash
+npm run dev
+npm run build
+npm run start
+npm run lint
+```

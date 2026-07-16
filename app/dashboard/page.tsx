@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase'
+import { createClient } from '@/lib/supabase/server'
 import SiteNav from '../components/site-nav'
 import DashboardClient from './dashboard-client'
 
@@ -17,44 +17,72 @@ type ConceptRecord = {
 
 export const dynamic = 'force-dynamic'
 
-export default async function DashboardPage() {
-  try {
-    const supabase = createClient()
-
-    const { data, error } = await supabase.from('concepts').select('*')
-
-    if (error) {
-      return (
-        <div className="min-h-screen bg-slate-950 text-slate-100">
-          <SiteNav currentPage="dashboard" />
-          <main className="px-4 py-10 sm:px-6 lg:px-8">
-            <div className="mx-auto max-w-7xl rounded-2xl border border-slate-800 bg-slate-900/80 p-8 text-slate-300">
-              No concepts are available yet. Start a chat and save progress to populate your dashboard.
-            </div>
-          </main>
+function DashboardShell({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <SiteNav currentPage="dashboard" />
+      <main className="px-4 py-10 sm:px-6 lg:px-8">
+        <div className="mx-auto max-w-7xl rounded-2xl border border-slate-800 bg-slate-900/80 p-8 text-slate-300">
+          {children}
         </div>
-      )
-    }
+      </main>
+    </div>
+  )
+}
 
-    const concepts = (data ?? []) as ConceptRecord[]
+async function loadDashboardConcepts(): Promise<
+  { status: 'unauthenticated' } | { status: 'empty' } | { status: 'ok'; concepts: ConceptRecord[] }
+> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
 
-    return (
-      <div className="min-h-screen bg-slate-950 text-slate-100">
-        <SiteNav currentPage="dashboard" />
-        <DashboardClient concepts={concepts} />
-      </div>
-    )
-  } catch (error) {
+  if (!user) {
+    return { status: 'unauthenticated' }
+  }
+
+  const { data, error } = await supabase
+    .from('concepts')
+    .select('*')
+    .eq('user_id', user.id)
+    .order('updated_at', { ascending: false })
+
+  if (error) {
     console.error('Failed to load concepts', error)
+    return { status: 'empty' }
+  }
+
+  return { status: 'ok', concepts: (data ?? []) as ConceptRecord[] }
+}
+
+export default async function DashboardPage() {
+  const result = await loadDashboardConcepts()
+
+  if (result.status === 'unauthenticated') {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100">
-        <SiteNav currentPage="dashboard" />
-        <main className="px-4 py-10 sm:px-6 lg:px-8">
-          <div className="mx-auto max-w-7xl rounded-2xl border border-slate-800 bg-slate-900/80 p-8 text-slate-300">
-            No concepts are available yet. Start a chat and save progress to populate your dashboard.
-          </div>
-        </main>
-      </div>
+      <DashboardShell>
+        Sign in to view your concept mastery dashboard.
+      </DashboardShell>
     )
   }
+
+  if (result.status === 'empty') {
+    return (
+      <DashboardShell>
+        No concepts are available yet. Start a chat and save progress to populate your dashboard.
+      </DashboardShell>
+    )
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <SiteNav currentPage="dashboard" />
+      <DashboardClient concepts={result.concepts} />
+    </div>
+  )
 }

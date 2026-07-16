@@ -1,9 +1,25 @@
-import { createGroq } from '@ai-sdk/groq'
-import { generateText } from 'ai'
 import { NextRequest, NextResponse } from 'next/server'
+import { requireUser } from '@/lib/auth'
+import { detectConceptFromMessage } from '@/lib/concept-detection'
+import { checkRateLimit } from '@/lib/rate-limit'
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireUser()
+    if (auth.error) return auth.error
+
+    const rateLimit = await checkRateLimit(auth.supabase, auth.user.id, 'detect-concept')
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        {
+          subject: '',
+          concept: '',
+          error: `Rate limit reached (${rateLimit.limit}/hour). Try again in about ${rateLimit.retryAfterMinutes} minutes.`,
+        },
+        { status: 429 },
+      )
+    }
+
     const body = await request.json()
     const userMessage = typeof body?.userMessage === 'string' ? body.userMessage : ''
 
@@ -11,33 +27,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ subject: '', concept: '' }, { status: 200 })
     }
 
-    const groq = createGroq({ apiKey: process.env.GROQ_API_KEY })
+    const detected = await detectConceptFromMessage(userMessage)
 
-    const { text } = await generateText({
-      model: groq('llama-3.1-8b-instant'),
-      prompt: [
-        'Extract the study subject and concept from the following message.',
-        'Return ONLY valid JSON with this exact shape: {"subject":"...","concept":"..."}.',
-        'If the message is not about studying a concept, return {"subject":"","concept":""}.',
-        'Do not include any surrounding text or markdown.',
-        '',
-        `Message: ${userMessage}`,
-      ].join('\n'),
-    })
-
-    let parsed: { subject?: unknown; concept?: unknown }
-    try {
-      parsed = JSON.parse(text)
-    } catch {
-      return NextResponse.json({ subject: '', concept: '' }, { status: 200 })
-    }
-
-    return NextResponse.json({
-      subject: typeof parsed.subject === 'string' ? parsed.subject : '',
-      concept: typeof parsed.concept === 'string' ? parsed.concept : '',
-    })
+    return NextResponse.json(detected)
   } catch (error) {
     console.error('Detect concept route error', error)
-    return NextResponse.json({ subject: '', concept: '' }, { status: 500 })
+    return NextResponse.json({ subject: '', concept: '' }, { status: 200 })
   }
 }

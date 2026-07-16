@@ -3,6 +3,7 @@
 import { ChangeEvent, useEffect, useRef, useState } from "react"
 import ChatSidebar from "./components/chat-sidebar"
 import FileUploadPanel from "./components/file-upload-panel"
+import OnboardingModal from "./components/onboarding-modal"
 import ProfileMenu from "./components/profile-menu"
 import SiteNav from "./components/site-nav"
 
@@ -23,21 +24,8 @@ type ChatMessage = {
   pending?: boolean
   showSaveButton?: boolean
   saveState?: "idle" | "saving" | "saved" | "error"
-}
-
-function getRelativeDate(iso: string) {
-  const diffMs = Date.now() - new Date(iso).getTime()
-  const diffMinutes = Math.max(1, Math.round(diffMs / 60000))
-
-  if (diffMinutes < 60) return `${diffMinutes}m ago`
-  const diffHours = Math.round(diffMinutes / 60)
-  if (diffHours < 24) return `${diffHours}h ago`
-  const diffDays = Math.round(diffHours / 24)
-  if (diffDays < 7) return `${diffDays}d ago`
-  return new Date(iso).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  })
+  subject?: string
+  concept?: string
 }
 
 function parseConceptPayload(text: string) {
@@ -94,7 +82,19 @@ export default function Home() {
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([])
   const [isUploadPanelOpen, setIsUploadPanelOpen] = useState(false)
   const [isUploadingFiles, setIsUploadingFiles] = useState(false)
+  const [profileInitials, setProfileInitials] = useState("SA")
+  const [showOnboarding, setShowOnboarding] = useState(false)
+  const [preferredSubject, setPreferredSubject] = useState<string | null>(null)
+  const [memoryNotice, setMemoryNotice] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+
+  const getInitials = (value: string) => {
+    const cleaned = value.trim()
+    if (!cleaned) return "SA"
+    const parts = cleaned.split(/\s+/).filter(Boolean)
+    if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase()
+    return cleaned.slice(0, 2).toUpperCase()
+  }
 
   const loadChats = async () => {
     const response = await fetch("/api/chats")
@@ -116,7 +116,37 @@ export default function Home() {
   }
 
   useEffect(() => {
-    void loadChats()
+    let cancelled = false
+
+    void (async () => {
+      const [chatsResponse, profileResponse] = await Promise.all([
+        fetch("/api/chats"),
+        fetch("/api/profile"),
+      ])
+
+      if (cancelled) return
+
+      if (chatsResponse.ok) {
+        const data = (await chatsResponse.json()) as ChatSummary[]
+        setChats(data)
+      }
+
+      if (profileResponse.ok) {
+        const data = (await profileResponse.json()) as {
+          displayName?: string
+          email?: string | null
+          onboardingCompleted?: boolean
+          preferredSubject?: string | null
+        }
+        setProfileInitials(getInitials(data.displayName || data.email || "SA"))
+        setPreferredSubject(data.preferredSubject ?? null)
+        setShowOnboarding(!data.onboardingCompleted)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const handleSelectChat = async (chatId: string) => {
@@ -208,6 +238,24 @@ export default function Home() {
     removeSelectedImage()
   }
 
+  const handleCompleteOnboarding = async (subject: string) => {
+    const response = await fetch("/api/profile", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        onboardingCompleted: true,
+        preferredSubject: subject,
+      }),
+    })
+
+    if (!response.ok) {
+      throw new Error("Failed to save onboarding")
+    }
+
+    setPreferredSubject(subject)
+    setShowOnboarding(false)
+  }
+
   const handleSend = async () => {
     const trimmedInput = input.trim()
     const allFiles = [
@@ -221,6 +269,7 @@ export default function Home() {
     setIsSending(true)
     setIsUploadingFiles(true)
     setUploadError(null)
+    setMemoryNotice(null)
 
     let chatId = activeChatId
     if (!chatId) {
@@ -270,11 +319,23 @@ export default function Home() {
           body: formData,
         })
 
-        const uploadData = (await uploadResponse.json()) as { imageUrls?: string[]; error?: string }
+        const uploadData = (await uploadResponse.json()) as {
+          imageUrls?: string[]
+          error?: string
+          memorySaved?: boolean
+          savedSubject?: string
+          savedConcept?: string
+        }
         if (!uploadResponse.ok || !uploadData.imageUrls?.length) {
           throw new Error(uploadData.error || 'Image upload failed')
         }
         uploadedImageUrls = uploadData.imageUrls
+
+        if (uploadData.memorySaved && uploadData.savedSubject && uploadData.savedConcept) {
+          setMemoryNotice(
+            `Saved to memory: ${uploadData.savedSubject} — ${uploadData.savedConcept}`,
+          )
+        }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Image upload failed'
@@ -298,7 +359,7 @@ export default function Home() {
     const detectionResponse = await fetch("/api/detect-concept", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userMessage: trimmedInput }),
+      body: JSON.stringify({ userMessage: trimmedInput || "Sent an image" }),
     })
     const detected = (await detectionResponse.json()) as { subject: string; concept: string }
 
@@ -306,13 +367,28 @@ export default function Home() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userMessage: trimmedInput,
+        userMessage: trimmedInput || (uploadedImageUrls.length > 0 ? "Sent an image" : ""),
         subject: detected.subject,
         concept: detected.concept,
         chatId,
         imageUrls: uploadedImageUrls,
       }),
     })
+
+    if (!response.ok) {
+      const errorData = (await response.json().catch(() => null)) as { error?: string } | null
+      const message = errorData?.error || "Chat request failed"
+      setUploadError(message)
+      setMessages((prev) =>
+        prev.map((messageItem) =>
+          messageItem.id === assistantMessageId
+            ? { ...messageItem, content: message, pending: false }
+            : messageItem,
+        ),
+      )
+      setIsSending(false)
+      return
+    }
 
     if (!response.body) {
       setIsSending(false)
@@ -337,7 +413,16 @@ export default function Home() {
     streamedText += decoder.decode()
     setMessages((prev) =>
       prev.map((message) =>
-        message.id === assistantMessageId ? { ...message, content: sanitizeContent(streamedText), pending: false, showSaveButton: Boolean(detected.subject && detected.concept) } : message,
+        message.id === assistantMessageId
+          ? {
+              ...message,
+              content: sanitizeContent(streamedText),
+              pending: false,
+              showSaveButton: Boolean(detected.subject && detected.concept),
+              subject: detected.subject,
+              concept: detected.concept,
+            }
+          : message,
       ),
     )
 
@@ -347,6 +432,18 @@ export default function Home() {
   }
 
   const handleSaveProgress = async (assistantMessage: ChatMessage) => {
+    const subject = assistantMessage.subject?.trim() || ""
+    const concept = assistantMessage.concept?.trim() || ""
+
+    if (!subject || !concept) {
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === assistantMessage.id ? { ...message, saveState: "error" } : message,
+        ),
+      )
+      return
+    }
+
     const payload = parseConceptPayload(assistantMessage.content)
     setMessages((prev) =>
       prev.map((message) =>
@@ -358,8 +455,8 @@ export default function Home() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        subject: "",
-        concept: "",
+        subject,
+        concept,
         masteryLevel: "Developing",
         overviewGist: payload.overviewGist,
         deepDiveGist: payload.deepDiveGist,
@@ -388,6 +485,12 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.18),_transparent_22%),radial-gradient(circle_at_bottom_right,_rgba(168,85,247,0.16),_transparent_30%),linear-gradient(180deg,#02040d_0%,#050813_100%)] text-slate-100">
+      {showOnboarding ? (
+        <OnboardingModal
+          preferredSubject={preferredSubject}
+          onComplete={handleCompleteOnboarding}
+        />
+      ) : null}
       <SiteNav currentPage="chat" />
       <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-6 px-4 py-6 lg:flex-row lg:px-6">
         <div className={`${isSidebarOpen ? 'block' : 'hidden'} w-full lg:block lg:w-80`}>
@@ -451,7 +554,9 @@ export default function Home() {
                               ? "Saving..."
                               : message.saveState === "saved"
                                 ? "Saved"
-                                : "Save progress"}
+                                : message.saveState === "error"
+                                  ? "Save failed — retry"
+                                  : "Save progress"}
                           </button>
                         </div>
                       ) : null}
@@ -481,6 +586,12 @@ export default function Home() {
                 <button className="rounded-full border border-rose-400/20 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-rose-200" onClick={() => void handleSend()}>
                   Retry
                 </button>
+              </div>
+            ) : null}
+
+            {memoryNotice ? (
+              <div className="mb-4 rounded-[1.25rem] border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+                {memoryNotice}
               </div>
             ) : null}
 
@@ -538,18 +649,23 @@ export default function Home() {
                   {isSending ? "Sending" : "Send"}
                 </button>
                 <button
-                  className="inline-flex h-14 w-14 items-center justify-center rounded-[1.75rem] border border-white/10 bg-slate-900/80 text-lg text-slate-200 transition duration-200 hover:bg-slate-800/90"
+                  className="inline-flex h-14 w-14 items-center justify-center rounded-[1.75rem] border border-white/10 bg-slate-900/80 text-sm font-semibold text-slate-200 transition duration-200 hover:bg-slate-800/90"
                   onClick={() => setIsProfileOpen(true)}
                   aria-label="Open profile menu"
                 >
-                  AC
+                  {profileInitials}
                 </button>
               </div>
             </div>
           </div>
         </main>
       </div>
-      <ProfileMenu isOpen={isProfileOpen} onClose={() => setIsProfileOpen(false)} />
+      <ProfileMenu
+        isOpen={isProfileOpen}
+        onClose={() => setIsProfileOpen(false)}
+        initials={profileInitials}
+        onProfileUpdated={(profile) => setProfileInitials(getInitials(profile.displayName || profile.email || "SA"))}
+      />
     </div>
   )
 }

@@ -1,8 +1,21 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #02040d;
+  --foreground: #e2e8f0;
+  --panel: rgba(8, 17, 36, 0.92);
+  --panel-border: rgba(255, 255, 255, 0.1);
+  --muted: #94a3b8;
+  --accent: #22d3ee;
+}
+
+html.theme-light {
+  --background: #f4f7fb;
+  --foreground: #0f172a;
+  --panel: rgba(255, 255, 255, 0.9);
+  --panel-border: rgba(15, 23, 42, 0.08);
+  --muted: #64748b;
+  --accent: #0891b2;
 }
 
 @theme inline {
@@ -12,17 +25,10 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
 html {
@@ -37,4 +43,19 @@ textarea {
 
 * {
   box-sizing: border-box;
+}
+
+html.theme-light .bg-slate-950,
+html.theme-light .bg-\[radial-gradient\(circle_at_top_left\,_rgba\(56\,189\,248\,0\.18\)\,_transparent_22\%\)\,radial-gradient\(circle_at_bottom_right\,_rgba\(168\,85\,247\,0\.16\)\,_transparent_30\%\)\,linear-gradient\(180deg\,\#02040d_0\%\,\#050813_100\%\)\] {
+  background: linear-gradient(180deg, #f8fbff 0%, #eef4fb 100%) !important;
+}
+
+html.theme-light .text-slate-100,
+html.theme-light .text-white {
+  color: #0f172a;
+}
+
+html.theme-light .text-slate-300,
+html.theme-light .text-slate-400 {
+  color: #475569;
 }

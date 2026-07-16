@@ -1,13 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase'
+import { requireUser } from '@/lib/auth'
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ chatId: string }> },
 ) {
   try {
+    const auth = await requireUser()
+    if (auth.error) return auth.error
+
+    const { user, supabase } = auth
     const { chatId } = await params
-    const supabase = createClient()
+
+    const { data: chat, error: chatError } = await supabase
+      .from('chats')
+      .select('id')
+      .eq('id', chatId)
+      .eq('user_id', user.id)
+      .maybeSingle()
+
+    if (chatError) {
+      throw chatError
+    }
+
+    if (!chat) {
+      return NextResponse.json({ error: 'Chat not found' }, { status: 404 })
+    }
 
     const { data, error } = await supabase
       .from('messages')

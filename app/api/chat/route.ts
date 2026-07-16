@@ -1,9 +1,16 @@
 import { createGroq } from '@ai-sdk/groq'
 import { streamText } from 'ai'
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase'
+import { requireUser } from '@/lib/auth'
+import { checkRateLimit } from '@/lib/rate-limit'
 
-function buildSystemPrompt(conceptRow: any, subject: string, concept: string) {
+export const maxDuration = 60
+
+function buildSystemPrompt(conceptRow: {
+  mastery_level?: string | null
+  weak_areas?: string[] | null
+  strong_areas?: string[] | null
+} | null, subject: string, concept: string) {
   const subjectContext = subject?.trim() ? `Subject: ${subject.trim()}` : 'Subject: general study'
   const conceptContext = concept?.trim() ? `Concept: ${concept.trim()}` : 'Concept: general discussion'
 
@@ -73,6 +80,25 @@ function getImageMediaType(url: string) {
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireUser()
+    if (auth.error) return auth.error
+
+    const { user, supabase } = auth
+
+    const rateLimit = await checkRateLimit(supabase, user.id, 'chat')
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        {
+          error: `Chat limit reached (${rateLimit.limit}/hour). Try again in about ${rateLimit.retryAfterMinutes} minutes.`,
+        },
+        { status: 429 },
+      )
+    }
+
+    if (!process.env.GROQ_API_KEY) {
+      return NextResponse.json({ error: 'GROQ_API_KEY is not configured' }, { status: 500 })
+    }
+
     const body = await request.json()
     const userMessage = typeof body?.userMessage === 'string' ? body.userMessage : ''
     const subject = typeof body?.subject === 'string' ? body.subject : ''
@@ -90,9 +116,26 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'chatId is required' }, { status: 400 })
     }
 
-    const supabase = createClient()
+    const { data: ownedChat, error: ownedChatError } = await supabase
+      .from('chats')
+      .select('id')
+      .eq('id', chatId)
+      .eq('user_id', user.id)
+      .maybeSingle()
 
-    await supabase.from('chats').upsert({ id: chatId, title: null }, { onConflict: 'id' })
+    if (ownedChatError) {
+      throw ownedChatError
+    }
+
+    if (!ownedChat) {
+      return NextResponse.json({ error: 'Chat not found' }, { status: 404 })
+    }
+
+    await supabase
+      .from('chats')
+      .update({ updated_at: new Date().toISOString() })
+      .eq('id', chatId)
+      .eq('user_id', user.id)
 
     const { error: userMessageError } = await supabase.from('messages').insert({
       chat_id: chatId,
@@ -116,17 +159,23 @@ export async function POST(request: NextRequest) {
 
     if (count === 1) {
       const title = inferTitleFromMessage(userMessage)
-      await supabase.from('chats').update({ title }).eq('id', chatId)
+      await supabase.from('chats').update({ title }).eq('id', chatId).eq('user_id', user.id)
     }
 
     const subjectTrimmed = subject.trim()
     const conceptTrimmed = concept.trim()
 
-    let conceptRow: any = null
+    let conceptRow: {
+      mastery_level?: string | null
+      weak_areas?: string[] | null
+      strong_areas?: string[] | null
+    } | null = null
+
     if (subjectTrimmed && conceptTrimmed) {
       const { data, error } = await supabase
         .from('concepts')
         .select('*')
+        .eq('user_id', user.id)
         .eq('subject', subjectTrimmed)
         .eq('concept', conceptTrimmed)
         .maybeSingle()
@@ -139,7 +188,6 @@ export async function POST(request: NextRequest) {
     }
 
     const systemPrompt = buildSystemPrompt(conceptRow, subjectTrimmed, conceptTrimmed)
-
     const groq = createGroq({ apiKey: process.env.GROQ_API_KEY })
 
     const messages: Array<{

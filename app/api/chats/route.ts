@@ -1,13 +1,16 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase'
+import { NextResponse } from 'next/server'
+import { requireUser } from '@/lib/auth'
 
 export async function POST() {
   try {
-    const supabase = createClient()
+    const auth = await requireUser()
+    if (auth.error) return auth.error
+
+    const { user, supabase } = auth
 
     const { data, error } = await supabase
       .from('chats')
-      .insert({ title: null })
+      .insert({ title: null, user_id: user.id })
       .select('id')
       .single()
 
@@ -24,11 +27,15 @@ export async function POST() {
 
 export async function GET() {
   try {
-    const supabase = createClient()
+    const auth = await requireUser()
+    if (auth.error) return auth.error
+
+    const { user, supabase } = auth
 
     const { data, error } = await supabase
       .from('chats')
       .select('id, title, created_at')
+      .eq('user_id', user.id)
       .order('updated_at', { ascending: false })
 
     if (error) {

@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase'
+import { requireUser } from '@/lib/auth'
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireUser()
+    if (auth.error) return auth.error
+
+    const { user, supabase } = auth
     const body = await request.json()
     const subject = typeof body?.subject === 'string' ? body.subject.trim() : ''
     const concept = typeof body?.concept === 'string' ? body.concept.trim() : ''
@@ -26,12 +30,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'subject and concept are required' }, { status: 400 })
     }
 
-    const supabase = createClient()
-
     const { data, error } = await supabase
       .from('concepts')
       .upsert(
         {
+          user_id: user.id,
           subject,
           concept,
           mastery_level: masteryLevel,
@@ -41,8 +44,9 @@ export async function POST(request: NextRequest) {
           weak_areas: weakAreas,
           next_steps: nextSteps,
           notes,
+          updated_at: new Date().toISOString(),
         },
-        { onConflict: 'subject,concept' },
+        { onConflict: 'user_id,subject,concept' },
       )
       .select()
       .single()
